@@ -40,6 +40,12 @@ extension AgentViewModel {
             if !path.hasPrefix("/") && !path.hasPrefix("~") && !pf.isEmpty {
                 path = (pf as NSString).appendingPathComponent(path)
             }
+            // Reject paths that escape the project folder via `..` or
+            // absolute-path traversal. The project folder must be the
+            // containment root — every write lands inside it.
+            if !pf.isEmpty, !PathSecurity.isContained(path, within: pf) {
+                return "Error: write_file path \(path) is outside the project folder (\(pf)). Recovery: use a path inside the project folder, or change projects with file(action:\"cd\")."
+            }
             let content = input["content"] as? String ?? ""
             guard !content.isEmpty else { return "Error: content is required for write_file (empty content would truncate the file). Recovery: pass content:\"...\"." }
             let tabID = selectedTabId ?? Self.mainTabID
@@ -56,6 +62,9 @@ extension AgentViewModel {
             // Resolve relative paths against project folder
             if !path.hasPrefix("/") && !path.hasPrefix("~") && !pf.isEmpty {
                 path = (pf as NSString).appendingPathComponent(path)
+            }
+            if !pf.isEmpty, !PathSecurity.isContained(path, within: pf) {
+                return "Error: edit_file path \(path) is outside the project folder (\(pf)). Recovery: use a path inside the project folder."
             }
             let expanded = (path as NSString).expandingTildeInPath
             // Basename search if file not found — same as read_file
@@ -175,6 +184,17 @@ extension AgentViewModel {
             let resolved = stripped.hasPrefix("/") || stripped.hasPrefix("~")
                 ? (stripped as NSString).expandingTildeInPath
                 : (pf as NSString).appendingPathComponent(stripped)
+            // Allow mkdir anywhere under the user's home OR the current project
+            // folder. Refuse system roots (/etc, /usr, /System, etc.) which
+            // would require privileges we should not be silently exercising.
+            let allowedRoots = [
+                NSHomeDirectory(),
+                pf.isEmpty ? nil : pf,
+            ].compactMap { $0 }
+            let isAllowed = allowedRoots.contains(where: { PathSecurity.isContained(resolved, within: $0) })
+            if !isAllowed {
+                return "Error: mkdir path \(resolved) is outside your home and the project folder. Refusing to create. Recovery: pick a path under ~ or inside the project."
+            }
             let escaped = CodingService.shellEscape(resolved)
             let result = await executeViaUserAgent(command: "mkdir -p \(escaped) && echo 'Created: \(resolved)'")
             let out = result.output.trimmingCharacters(in: .whitespacesAndNewlines)

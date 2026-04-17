@@ -67,6 +67,47 @@ Protected macOS APIs require user approval. Agent handles TCC correctly:
 
 Source: `Agent/Services/NSAppleScriptService.swift`.
 
+## Path Security
+
+`Agent/Services/PathSecurity.swift` centralizes:
+
+- `isContained(child, within: root)` — canonicalizes both paths (expands `~`,
+  resolves symlinks, removes `..`) and verifies the child still lives under
+  the root. Used by `write_file`, `edit_file`, and `mkdir`.
+- `safeIdentifier(id)` — rejects path separators, `..`, NULs, and control
+  characters. Used by `MemoryStore`, `SkillsService`, `SessionStore` before
+  the id is pasted into a filename.
+- `hasAllowedScheme(url)` — limits URLs to http(s) (blocks `file://`,
+  `javascript:`, `data:`, `x-apple-*`).
+- `isPrivateNetworkHost(host)` — blocks loopback, RFC1918, link-local, and
+  cloud-metadata endpoints (169.254.169.254). Mitigates SSRF in `web_fetch`.
+
+## Tool-Level Mitigations
+
+| Tool | Protection |
+|------|-----------|
+| `write_file`, `edit_file` | Project-folder containment. Paths resolving outside are refused. |
+| `mkdir` | Only permitted under `$HOME` or the current project folder. |
+| `web_fetch` | http(s) only, blocks private/loopback/metadata hosts, 5 MB cap, wraps response in `<untrusted_web_content>` delimiters. |
+| `safari_open` | http(s) only. `file://`, `javascript:`, `data:`, `x-apple-*` refused. |
+| `run_osascript`, `execute_javascript`, `run_javascript` | Script body written to a temp file and invoked via `Process.arguments` — no `/bin/zsh -c` wrapping, so quote-escape bypass is impossible. |
+| `applescript_tool` | Destructive verbs (`delete`, `quit`, etc.) blocked by default; `allow_writes: true` required. Word-boundary match + string-literal strip. |
+| Memory / Skills / Sessions | IDs validated via `PathSecurity.safeIdentifier`. File sizes capped (2 MB memory, 50 MB session, 1 MB hooks). |
+| `hooks.json` | Refuses to load if group/world-writable or larger than 1 MB. Saves with `0o600`. |
+| `ProjectIndex` | Files that resolve outside the project root after symlink resolution are skipped. |
+
+## Agent Script Dylib Load Guard
+
+`ScriptService.validateDylibPath` runs before every `dlopen()`:
+
+1. The path must exist as a regular file.
+2. It must not be a symbolic link (blocks after-validation redirection).
+3. The canonical path must still live inside `~/Documents/AgentScript/agents/`.
+4. The file must be owned by the current UID.
+
+A dylib-replacement attack via a pre-placed or symlinked `.dylib` in
+`.build/debug/` is refused before the code is loaded.
+
 ## XPC Sandboxing
 
 All privileged operations go through XPC (Inter-Process Communication):

@@ -535,6 +535,46 @@ extension ScriptService {
         return Self.agentsDir.appendingPathComponent(".build/debug/lib\(scriptName).dylib").path
     }
 
+    /// Validate a dylib path before `dlopen`. Returns nil when the path is
+    /// safe to load, otherwise a human-readable refusal reason.
+    ///   - the path must exist as a regular file
+    ///   - it must not be a symlink (symlinks let an attacker redirect
+    ///     the load target after the filename was validated)
+    ///   - it must be owned by the current user (not root, not staff)
+    ///   - the resolved path must still live under Self.agentsDir
+    static func validateDylibPath(_ path: String) -> String? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else {
+            return "dylib does not exist at \(path). Build the script first."
+        }
+
+        // Reject symlinks. `URLResourceValues.isSymbolicLink` uses lstat
+        // semantics via Foundation.
+        let url = URL(fileURLWithPath: path)
+        if let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey]),
+           values.isSymbolicLink == true {
+            return "dylib \(path) is a symlink. Symlinks are refused in the script load path."
+        }
+
+        // Verify the canonical path is still inside agentsDir.
+        let resolvedPath = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let agentsCanon = Self.agentsDir.standardizedFileURL.resolvingSymlinksInPath().path
+        let agentsWithSlash = agentsCanon.hasSuffix("/") ? agentsCanon : agentsCanon + "/"
+        guard resolvedPath.hasPrefix(agentsWithSlash) else {
+            return "dylib \(resolvedPath) resolves outside the agents directory (\(agentsCanon))."
+        }
+
+        // Verify owner UID matches the current user. A world-writable build
+        // dir with a root-owned dylib is a red flag.
+        if let attrs = try? fm.attributesOfItem(atPath: resolvedPath),
+           let ownerID = attrs[.ownerAccountID] as? UInt32 {
+            if ownerID != getuid() {
+                return "dylib \(resolvedPath) is owned by uid \(ownerID) (expected \(getuid())). Refusing to load."
+            }
+        }
+        return nil
+    }
+
     /// Check if the compiled dylib is up to date (newer than source file).
     func isDylibCurrent(name: String) -> Bool {
         let scriptName = name.replacingOccurrences(of: ".swift", with: "")
@@ -562,6 +602,15 @@ extension ScriptService {
     ) async -> (output: String, status: Int32) {
         let scriptName = name.replacingOccurrences(of: ".swift", with: "")
         let path = dylibPath(name: scriptName)
+
+        // SECURITY: the dylib path must be a regular file owned by the
+        // current user, not a symlink. Symlink redirection would let an
+        // attacker point the expected path at an arbitrary dylib on disk.
+        // The build directory also must live inside Self.agentsDir — reject
+        // anything outside the expected compile output directory.
+        if let symStatus = Self.validateDylibPath(path) {
+            return ("Refused: \(symStatus)", 1)
+        }
 
         // Resolve project folder: expand tilde + verify it exists; fall back to home.
         let fm = FileManager.default

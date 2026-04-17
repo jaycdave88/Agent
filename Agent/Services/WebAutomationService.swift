@@ -78,6 +78,16 @@ final class WebAutomationService: @unchecked Sendable {
     
     /// Open a URL in the specified browser. Returns immediately after the URL is sent — no page load wait.
     func open(url: URL, browser: BrowserType = .safari, waitForLoad: Bool = false) async throws -> String {
+        // SECURITY: restrict to http(s). Refuse file://, javascript:,
+        // x-apple-*, data:, etc. — these would let an LLM read local files
+        // or trigger arbitrary scheme handlers via the browser.
+        guard PathSecurity.hasAllowedScheme(url) else {
+            throw NSError(
+                domain: "WebAutomation",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Refused: only http(s) URLs are allowed; got scheme \(url.scheme ?? "(none)")."]
+            )
+        }
         // Try AppleScript first (fastest, most reliable)
         if let result = try? await openViaAppleScript(url: url, browser: browser) {
             if waitForLoad {

@@ -36,7 +36,7 @@ final class SessionStore {
         guard let data = try? JSONSerialization.data(withJSONObject: message),
               var line = String(data: data, encoding: .utf8) else { return }
         line += "\n"
-        let url = sessionFile(currentSessionId)
+        guard let url = sessionFile(currentSessionId) else { return }
         if FileManager.default.fileExists(atPath: url.path) {
             guard let handle = try? FileHandle(forWritingTo: url) else { return }
             handle.seekToEndOfFile()
@@ -79,7 +79,12 @@ final class SessionStore {
 
     /// Load messages from a session. Returns the message array and restores token state.
     func loadSession(_ sessionId: String) -> [[String: Any]] {
-        let url = sessionFile(sessionId)
+        guard let url = sessionFile(sessionId) else { return [] }
+        // Cap session-file size at 50 MB to avoid OOM on a corrupted/malicious file.
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int, size > 50 * 1024 * 1024 {
+            return []
+        }
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
 
         var messages: [[String: Any]] = []
@@ -109,7 +114,8 @@ final class SessionStore {
 
     /// Delete a session.
     func deleteSession(_ sessionId: String) {
-        try? FileManager.default.removeItem(at: sessionFile(sessionId))
+        guard let url = sessionFile(sessionId) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// Remove sessions older than 7 days.
@@ -121,7 +127,13 @@ final class SessionStore {
         }
     }
 
-    private func sessionFile(_ id: String) -> URL {
-        sessionsDir.appendingPathComponent("\(id).jsonl")
+    private func sessionFile(_ id: String) -> URL? {
+        // Reject path-separator / traversal / control chars in IDs. A session
+        // ID is expected to be a UUID or similar opaque token; any caller
+        // that supplies something weirder is almost certainly buggy or
+        // hostile, and we'd rather fail closed than silently read
+        // `../../etc/passwd.jsonl`.
+        guard let safe = PathSecurity.safeIdentifier(id) else { return nil }
+        return sessionsDir.appendingPathComponent("\(safe).jsonl")
     }
 }

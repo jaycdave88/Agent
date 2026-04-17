@@ -12,15 +12,19 @@ extension AgentViewModel {
         switch name {
         case "run_osascript":
             let script = input["script"] as? String ?? input["command"] as? String ?? ""
-            let escaped = script.replacingOccurrences(of: "'", with: "'\\''")
-            let command = "osascript -e '\(escaped)'"
             tab.appendLog("🍎 \(script)")
             tab.isRunning = true
             tab.flush()
 
-            let result = await Self.executeTCCStreaming(command: command) { [weak tab] chunk in
-                Task { @MainActor in tab?.appendOutput(chunk) }
-            }
+            // SECURITY: run via Process.arguments (no shell). See
+            // runInterpreterOnScript in ShellTools.swift — shell-escape
+            // bypasses are not possible when there is no shell.
+            let result = await Self.runInterpreterOnScript(
+                interpreter: "/usr/bin/osascript",
+                languageArgs: [],
+                scriptExtension: "applescript",
+                script: script
+            )
             tab.isRunning = false
 
             guard !Task.isCancelled else { return TabToolResult(toolResult: nil, isComplete: false) }
@@ -132,11 +136,14 @@ extension AgentViewModel {
             tab.appendLog("⚡️ JXA:\n\(script)")
             tab.isRunning = true
             tab.flush()
-            let escaped = script.replacingOccurrences(of: "'", with: "'\\''")
-            let command = "osascript -l JavaScript -e '\(escaped)'"
-            let result = await Self.executeTCCStreaming(command: command) { [weak tab] chunk in
-                Task { @MainActor in tab?.appendOutput(chunk) }
-            }
+            // SECURITY: run via Process.arguments (no shell). See
+            // runInterpreterOnScript in ShellTools.swift.
+            let result = await Self.runInterpreterOnScript(
+                interpreter: "/usr/bin/osascript",
+                languageArgs: ["-l", "JavaScript"],
+                scriptExtension: "js",
+                script: script
+            )
             tab.isRunning = false
             let toolContent: String
             if result.status == 0 {

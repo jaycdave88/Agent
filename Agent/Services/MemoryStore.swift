@@ -119,21 +119,30 @@ final class MemoryStore {
 
     /// Save or update a memory entry.
     func save(_ entry: MemoryEntry) {
-        let url = memoryDir.appendingPathComponent("\(entry.id).md")
+        guard let safe = PathSecurity.safeIdentifier(entry.id) else { return }
+        let url = memoryDir.appendingPathComponent("\(safe).md")
         try? entry.serialize().write(to: url, atomically: true, encoding: .utf8)
     }
 
     /// Delete a memory entry by ID.
     func delete(id: String) {
-        let url = memoryDir.appendingPathComponent("\(id).md")
+        guard let safe = PathSecurity.safeIdentifier(id) else { return }
+        let url = memoryDir.appendingPathComponent("\(safe).md")
         try? FileManager.default.removeItem(at: url)
     }
 
     /// Load a single memory entry by ID.
     func load(id: String) -> MemoryEntry? {
-        let url = memoryDir.appendingPathComponent("\(id).md")
+        guard let safe = PathSecurity.safeIdentifier(id) else { return nil }
+        let url = memoryDir.appendingPathComponent("\(safe).md")
+        // Cap individual memory file size at 2 MB so a corrupted/large
+        // file can't OOM the process during parsing.
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int, size > 2 * 1024 * 1024 {
+            return nil
+        }
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return MemoryEntry.parse(id: id, raw: raw)
+        return MemoryEntry.parse(id: safe, raw: raw)
     }
 
     /// List all memory entries (frontmatter only — content loaded lazily).

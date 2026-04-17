@@ -167,12 +167,18 @@ final class HooksService {
 
         // Refuse to load if hooks.json is group/world-writable (another user
         // or process could have injected a malicious hook for persistence).
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-           let perms = attrs[.posixPermissions] as? Int {
-            let groupWrite = (perms & 0o020) != 0
-            let otherWrite = (perms & 0o002) != 0
-            if groupWrite || otherWrite {
-                NSLog("HooksService: hooks.json is group/world-writable (0o%o) — refusing to load. Fix: chmod 600 \(fileURL.path)", perms)
+        // Also cap at 1 MB to prevent OOM from a tampered file.
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path) {
+            if let perms = attrs[.posixPermissions] as? Int {
+                let groupWrite = (perms & 0o020) != 0
+                let otherWrite = (perms & 0o002) != 0
+                if groupWrite || otherWrite {
+                    NSLog("HooksService: hooks.json is group/world-writable (0o%o) — refusing to load. Fix: chmod 600 \(fileURL.path)", perms)
+                    return
+                }
+            }
+            if let size = attrs[.size] as? Int, size > 1 * 1024 * 1024 {
+                NSLog("HooksService: hooks.json is larger than 1 MB (%d bytes) — refusing to load.", size)
                 return
             }
         }

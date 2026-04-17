@@ -290,4 +290,65 @@ extension AgentViewModel {
             || lower.contains("shortcuts run")       // Shortcuts CLI (often needs Automation)
     }
 
+    /// Run a script interpreter (osascript, /usr/bin/osascript -l JavaScript, etc.)
+    /// against untrusted source WITHOUT going through `/bin/zsh -c`. The script
+    /// body is written to a temp file and the interpreter is invoked with an
+    /// argument array — no shell parsing, so there's no way for the body to
+    /// break out via crafted quote sequences.
+    nonisolated static func runInterpreterOnScript(
+        interpreter: String,
+        languageArgs: [String] = [],
+        scriptExtension: String,
+        script: String,
+        workingDirectory: String = ""
+    ) async -> (status: Int32, output: String) {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let uniqueName = "agent-script-\(UUID().uuidString).\(scriptExtension)"
+        let tmpURL = tmpDir.appendingPathComponent(uniqueName)
+        do {
+            try script.write(to: tmpURL, atomically: true, encoding: .utf8)
+            // Script file readable only by the owner.
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: tmpURL.path
+            )
+        } catch {
+            return (-1, "Failed to stage script: \(error.localizedDescription)")
+        }
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: interpreter)
+                process.arguments = languageArgs + [tmpURL.path]
+
+                if !workingDirectory.isEmpty {
+                    process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
+                }
+
+                var env = ProcessInfo.processInfo.environment
+                env["HOME"] = FileManager.default.homeDirectoryForCurrentUser.path
+                env["AGENT_PROJECT_FOLDER"] = workingDirectory.isEmpty
+                    ? FileManager.default.homeDirectoryForCurrentUser.path
+                    : workingDirectory
+                process.environment = env
+
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                } catch {
+                    continuation.resume(returning: (-1, "Failed to launch \(interpreter): \(error.localizedDescription)"))
+                    return
+                }
+
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                continuation.resume(returning: (process.terminationStatus, output))
+            }
+        }
+    }
 }

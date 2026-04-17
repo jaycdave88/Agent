@@ -94,13 +94,15 @@ final class SkillsService {
 
         \(skill.content)
         """
-        let url = skillsDir.appendingPathComponent("\(skill.id).md")
+        guard let safe = PathSecurity.safeIdentifier(skill.id) else { return }
+        let url = skillsDir.appendingPathComponent("\(safe).md")
         try? raw.write(to: url, atomically: true, encoding: .utf8)
     }
 
     /// Delete a skill by ID.
     func delete(id: String) {
-        let url = skillsDir.appendingPathComponent("\(id).md")
+        guard let safe = PathSecurity.safeIdentifier(id) else { return }
+        let url = skillsDir.appendingPathComponent("\(safe).md")
         try? FileManager.default.removeItem(at: url)
     }
 

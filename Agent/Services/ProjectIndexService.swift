@@ -240,7 +240,10 @@ enum ProjectIndexService {
             let text = String(data: data, encoding: .utf8) ?? ""
             let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             let mtime = iso.string(from: vals.contentModificationDate ?? Date())
-            let rel = relativePath(of: url, from: root)
+            guard let rel = relativePath(of: url, from: root) else {
+                // Symlink escape — file resolved outside project root.
+                continue
+            }
             let (lineCount, doc, symbols) = analyze(text: text, language: ext)
             records.append(Record(
                 path: rel,
@@ -256,13 +259,17 @@ enum ProjectIndexService {
         return records
     }
 
-    private static func relativePath(of url: URL, from root: URL) -> String {
+    /// Relative path from the project root, or nil when the resolved
+    /// file path lies outside the root (symlink escape). Callers should
+    /// skip files that return nil instead of indexing them.
+    private static func relativePath(of url: URL, from root: URL) -> String? {
         let rootPath = root.resolvingSymlinksInPath().path
         let filePath = url.resolvingSymlinksInPath().path
+        if filePath == rootPath { return "" }
         if filePath.hasPrefix(rootPath + "/") {
             return String(filePath.dropFirst(rootPath.count + 1))
         }
-        return filePath
+        return nil
     }
 
     // MARK: - Per-File Analysis

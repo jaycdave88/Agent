@@ -92,11 +92,18 @@ extension AgentViewModel {
             }
             return Self.enrichAppleScriptFailure(source: source, output: result.0)
         // osascript (runs osascript CLI in-process with TCC)
+        // SECURITY: do NOT embed user-supplied script in a shell command.
+        // The `'\''` escape can be broken out of with carefully crafted
+        // quote sequences. Write to a temp file and invoke osascript via
+        // Process.arguments — no shell parsing.
         case "run_osascript":
             let script = input["script"] as? String ?? input["command"] as? String ?? ""
-            let escaped = script.replacingOccurrences(of: "'", with: "'\\''")
-            let command = "osascript -e '\(escaped)'"
-            let result = await Self.executeTCCStreaming(command: command) { _ in }
+            let result = await Self.runInterpreterOnScript(
+                interpreter: "/usr/bin/osascript",
+                languageArgs: [],
+                scriptExtension: "applescript",
+                script: script
+            )
             if result.status == 0 {
                 let _ = scriptService.saveAppleScript(name: Self.autoScriptName(from: script), source: script)
                 return result.output.isEmpty ? "(no output, exit \(result.status))" : result.output
@@ -106,9 +113,12 @@ extension AgentViewModel {
         // JavaScript for Automation (JXA via osascript -l JavaScript)
         case "execute_javascript":
             let script = input["source"] as? String ?? input["script"] as? String ?? ""
-            let escaped = script.replacingOccurrences(of: "'", with: "'\\''")
-            let command = "osascript -l JavaScript -e '\(escaped)'"
-            let result = await Self.executeTCCStreaming(command: command) { _ in }
+            let result = await Self.runInterpreterOnScript(
+                interpreter: "/usr/bin/osascript",
+                languageArgs: ["-l", "JavaScript"],
+                scriptExtension: "js",
+                script: script
+            )
             if result.status == 0 {
                 let _ = scriptService.saveJavaScript(name: Self.autoScriptName(from: script), source: script)
                 return result.output.isEmpty ? "(no output, exit \(result.status))" : result.output

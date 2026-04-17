@@ -45,8 +45,13 @@ extension AgentViewModel {
             guard let source = scriptService.readJavaScript(name: scriptName) else {
                 return "Error: JXA script '\(scriptName)' not found. Use list_javascript first."
             }
-            let escaped = source.replacingOccurrences(of: "'", with: "'\\''")
-            let result = await Self.executeTCCStreaming(command: "osascript -l JavaScript -e '\(escaped)'") { _ in }
+            // SECURITY: invoke via Process.arguments (no shell).
+            let result = await Self.runInterpreterOnScript(
+                interpreter: "/usr/bin/osascript",
+                languageArgs: ["-l", "JavaScript"],
+                scriptExtension: "js",
+                script: source
+            )
             return result.output.isEmpty ? "(no output, exit \(result.status))" : result.output
 
         default:
